@@ -1,0 +1,34 @@
+==13397== NVPROF is profiling process 13397, command: ./main
+==13397== Profiling application: ./main
+==13397== Profiling result:
+Time(%)      Time     Calls       Avg       Min       Max  Name
+ 23.75%  966.07ms       100  9.6607ms  9.6235ms  9.7054ms  __omp_offloading_1d_2760092__ZN11OMP45StreamIdE5triadEv_l108
+ 23.24%  945.18ms       100  9.4518ms  9.4132ms  9.4934ms  __omp_offloading_1d_2760092__ZN11OMP45StreamIdE3addEv_l92
+ 19.42%  789.71ms       100  7.8971ms  7.8783ms  7.9256ms  __omp_offloading_1d_2760092__ZN11OMP45StreamIdE3mulEv_l78
+ 18.02%  732.93ms       100  7.3293ms  7.2966ms  7.3636ms  __omp_offloading_1d_2760092__ZN11OMP45StreamIdE4copyEv_l63
+  9.86%  401.06ms         6  66.843ms  65.912ms  68.130ms  [CUDA memcpy HtoD]
+  5.71%  232.22ms        11  21.111ms  1.8880us  78.192ms  [CUDA memcpy DtoH]
+
+==13397== API calls:
+Time(%)      Time     Calls       Avg       Min       Max  Name
+ 87.83%  3.66490s        11  333.17ms  34.179us  3.50976s  cuMemcpyDtoH
+  9.64%  402.30ms         6  67.050ms  66.227ms  68.207ms  cuMemcpyHtoD
+  1.44%  60.073ms         1  60.073ms  60.073ms  60.073ms  cuCtxCreate
+  0.85%  35.531ms         1  35.531ms  35.531ms  35.531ms  cuCtxDestroy
+  0.09%  3.6155ms         1  3.6155ms  3.6155ms  3.6155ms  cuModuleLoadDataEx
+  0.05%  2.1979ms       400  5.4940us  5.0850us  45.992us  cuLaunchKernel
+  0.04%  1.6576ms         1  1.6576ms  1.6576ms  1.6576ms  cuModuleUnload
+  0.03%  1.2537ms         3  417.90us  368.58us  503.59us  cuMemAlloc
+  0.01%  447.87us         3  149.29us  127.32us  191.78us  cuMemFree
+  0.01%  259.34us        83  3.1240us     218ns  110.72us  cuDeviceGetAttribute
+  0.01%  232.06us         1  232.06us  232.06us  232.06us  cudaGetDeviceProperties
+  0.00%  138.41us       400     346ns     310ns  2.3640us  cuFuncGetAttribute
+  0.00%  130.71us       416     314ns     266ns  1.7750us  cuCtxSetCurrent
+  0.00%  34.747us         1  34.747us  34.747us  34.747us  cuDeviceGetName
+  0.00%  33.436us         1  33.436us  33.436us  33.436us  cuDeviceTotalMem
+  0.00%  13.252us         8  1.6560us  1.2900us  2.7290us  cuModuleGetGlobal
+  0.00%  11.173us         8  1.3960us     913ns  2.7220us  cuModuleGetFunction
+  0.00%  3.4750us         3  1.1580us     452ns  2.4840us  cuDeviceGet
+  0.00%  1.7390us         3     579ns     355ns     937ns  cuDeviceGetCount
+  0.00%     821ns         1     821ns     821ns     821ns  cuInit
+  0.00%     697ns         1     697ns     697ns     697ns  cuDriverGetVersion

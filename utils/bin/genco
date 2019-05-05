@@ -1,0 +1,144 @@
+#!/bin/bash
+# -*- coding: utf-8 -*-
+
+## this script is to generate codeboject in x86 format
+# it will change llvm target from gfx to x86 and make a wrapper on it
+
+
+THIS_SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+#MLCC=${MLCC_BUILD_DIR}/ixcc
+
+CPPFILT=false
+PPU_ARCH="llvmir"
+
+# BCFILE is the input bc
+BCFILE=""
+
+function parse_opt(){
+    ARG=$1
+    OPT=${ARG%=*}
+    if [ "$OPT" == "--ppu-arch" ]; then
+        PPU_ARCH=${ARG##*=}
+        echo "[Opt Parse] --ppu-arch=$PPU_ARCH"
+    else
+	if [ "$BCFILE" == "" ]; then
+            BCFILE=$ARG
+	else
+            echo "option $ARG ignored"
+        fi
+    fi
+    ## opt=${ARG%,*}
+    ## FIXME support multiple arch by  while [ $# -gt 0 ] ; do
+}
+
+
+while [ $# -gt 0 ] ; do
+   case "$1" in
+      -o) 		OUTFILE=$2; shift ;;
+      -k) 		KEEP=k; ;;
+      -cppfilt) 	CPPFILT=true; ;;
+      -ixcc)            MLCC=$2; shift ;;
+      --ppu-arch)       PPU_ARCH=${2##=*}; shift ;;
+      --) 		shift ; break;;
+      *) 		parse_opt $1 ;;
+   esac
+   shift
+done
+
+if [ "$BCFILE" == "" ]; then
+    echo "[GENCO ERROR] No bcfile input"
+    exit
+fi
+
+BCFILENAME=${BCFILE##*/}
+FNAME=${BCFILENAME%.*}
+META_FILE=kernel_meta.yaml
+shift
+
+#  Allow output specifier after the cl file
+if [ "$1" == "-o" ]; then
+   OUTFILE=$2; shift ; shift;
+fi
+
+if [ ! -e "$BCFILE" ]  ; then
+   echo "ERROR:  The file $LASTARG does not exist."
+   exit
+fi
+
+CMD_LLA=${CMD_LLA:-llvm-dis}
+CMD_ASM=${CMD_ASM:-llvm-as}
+CO_WRITER=${CO_WRITER:-${MLCC}/bin/ppu_co_writer}
+
+echo $MLCC/bin/$CMD_LLA -o $FNAME.ll $BCFILE
+$MLCC/bin/$CMD_LLA -o $FNAME.ll $BCFILE
+
+# FIXME more then on kernel in file
+if [ "$CPPFILT" == "true" ] ; then
+   echo "grep amdgpu_kernel $FNAME.ll |cut -d '@' -f2 |cut -d '(' -f1 | c++filt | cut -d '(' -f1"
+   KERNEL_NAME=`grep amdgpu_kernel $FNAME.ll |cut -d '@' -f2 |cut -d '(' -f1 | c++filt | cut -d '(' -f1`
+else
+   echo "grep amdgpu_kernel $FNAME.ll |cut -d '@' -f2 |cut -d '(' -f1"
+   KERNEL_NAME=`grep amdgpu_kernel $FNAME.ll |cut -d '@' -f2 |cut -d '(' -f1 `
+fi
+
+echo "[GENCO] Find the device kernel name is"$KERNEL_NAME
+echo "[GENCO] the PPU_ARCH is $PPU_ARCH"
+
+if [ "$KERNEL_NAME" == "" ]; then
+    echo "[GENCO] No kernel found! exit 2"
+    exit 2
+fi
+
+AMD_TARGET_TRIPLE=${TARGET_TRIPLE:-amdgcn-amd-amdhsa}
+AMD_GPU_ARCH=gfx701
+AMD_CMD_LLC=${CMD_LLC:-$MLCC/bin/llc -mtriple ${AMD_TARGET_TRIPLE} -mcpu=$AMD_GPU_ARCH $BCFILE -amdgpu-dump-hsa-metadata}
+
+X86_OBJFILE=$FNAME.x86.o
+X86_TARGET_TRIPLE=${TARGET_TRIPLE:-x86_64-unknown-linux-gnu}
+X86_GPU_ARCH=x86-64
+X86_CMD_LLC=${CMD_LLC:-$MLCC/bin/llc -relocation-model=pic -mtriple ${X86_TARGET_TRIPLE} -mcpu=$PPU_ARCH -filetype=obj -o $X86_OBJFILE}
+
+# TODO filter out non-yaml
+$AMD_CMD_LLC 2> .$META_FILE.tmp
+echo python $THIS_SCRIPT_DIR/fix_meta_yaml.py .$META_FILE.tmp $META_FILE
+python $THIS_SCRIPT_DIR/fix_meta_yaml.py .$META_FILE.tmp $META_FILE
+rm .$META_FILE.tmp
+
+echo python $THIS_SCRIPT_DIR/change_llvm_target.py $FNAME.ll $FNAME.layout.ll $KERNEL_NAME
+python $THIS_SCRIPT_DIR/change_llvm_target.py $FNAME.ll $FNAME.layout.ll $KERNEL_NAME
+
+echo $MLCC/bin/$CMD_ASM -o $FNAME.layout.bc $FNAME.layout.ll
+$MLCC/bin/$CMD_ASM -o $FNAME.layout.bc $FNAME.layout.ll
+
+echo `pwd`
+echo $MLCC/bin/opt -O3 $FNAME.layout.bc  -o $FNAME.opt.bc
+$MLCC/bin/opt -O3 $FNAME.layout.bc  -o $FNAME.opt.bc
+
+echo $MLCC/bin/opt -load ${MLCC}/lib/LLVMFuncWapper.so -FuncWapper $FNAME.opt.bc  -o $FNAME.wrapper.bc
+$MLCC/bin/opt -load ${MLCC}/lib/LLVMFuncWapper.so -FuncWapper $FNAME.opt.bc  -o $FNAME.wrapper.bc
+
+echo $MLCC/bin/$CMD_LLA -o $FNAME.wrapper.ll $FNAME.wrapper.bc
+$MLCC/bin/$CMD_LLA -o $FNAME.wrapper.ll $FNAME.wrapper.bc
+
+echo python $THIS_SCRIPT_DIR/fix_wrapper_kernel.py $FNAME.wrapper.ll $FNAME.wrapper.fix.ll
+python $THIS_SCRIPT_DIR/fix_wrapper_kernel.py $FNAME.wrapper.ll $FNAME.wrapper.fix.ll
+$MLCC/bin/$CMD_ASM -o $FNAME.wrapper.fix.bc $FNAME.wrapper.fix.ll
+
+if [ "$PPU_ARCH" == "llvmir" ]; then
+  # LLVMir use rapper.fix.bc as input
+  echo $CO_WRITER --arch=llvmir --input=$FNAME.wrapper.fix.bc --output=$OUTFILE --meta=$META_FILE
+  $CO_WRITER --arch=llvmir --input=$FNAME.wrapper.fix.bc --output=$OUTFILE --meta=$META_FILE
+else
+  #OBJFILE X86_CMD_LLC will generate $X86_OBJFILE from wrpper.fix.bc
+  echo $X86_CMD_LLC $FNAME.wrapper.fix.bc
+  $X86_CMD_LLC $FNAME.wrapper.fix.bc
+
+  echo $CO_WRITER --arch=x86-64 --input=$X86_OBJFILE --output=$OUTFILE --meta=$META_FILE
+  $CO_WRITER --arch=x86-64 --input=$X86_OBJFILE --output=$OUTFILE --meta=$META_FILE
+fi
+
+
+if [ ! "$KEEP" == "k" ]; then
+  rm *.bc
+  rm *.ll
+fi

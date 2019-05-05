@@ -1,0 +1,20 @@
+
+
+RUNTIME DEBUG HOWTO
+  
+   The various build scripts build default release libraries in the $HCC2/lib 
+   directory. And, when possible, the scripts also build debug runtime libraries
+   in $HCC2/lib-debug directory. The 0.5 version of HCC2 supports the ability 
+   to set LIBRARY_PATH to $HCC2/lib-debug. This will cause the applicatin
+   binary to link to lib-debug versions of libomp.so and libomptarget.so found
+   in the lib-debug-directory. You need to do this so your application binary
+   is capable of generating various debug traces.  To activate these debug 
+   traces, you must set environment variables LIBOMPTARGET_DEBUG, ATMI_DEBUG, 
+   and/or LIBOMPTARGET_DEVICE_RTL_DEBUG.  
+
+   Our smoke test harness in hcc2/hcc2/test/smoke/Makefile.deps looks for the 
+   environment variable OFFLOAD_DEBUG=1.  If set, it uses the lib-debug library
+   by setting LIBRARY_PATH at compile time.   Then it sets runtime environment
+   variables depending on the value of the environment variable OFFLOAD_DEBUG.
+   Run "make help" to see the various values of OFFLOAD_DEBUG and what debug
+   levels they correspond to. 

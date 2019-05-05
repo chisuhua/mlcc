@@ -1,0 +1,657 @@
+#!/bin/bash
+# -*- coding: utf-8 -*-
+
+
+## this script compile cu file into ppu executable binary or gfx600 binary
+#  if it is ppu binary, it will use ppu llvm ir executor to run it
+#  if it is gfx600 binary, it need south-island executor to run it
+
+function usage() {
+/bin/cat 2>&1 <<"EOF"
+   mlcc: Compile a cu file into ppu or gcn executable binary
+
+   Usage: mlcc [ options ] filename.cu
+
+   Options with values:
+    -mlcc      <path>           $MLCC or /usr/local/mlcc
+    -o         <outfilename>    Default=<filename>.<ft> ft=hsaco
+EOF
+   exit 0
+}
+THIS_SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+MLCC=${MLCC_BUILD_DIR}/llvm
+
+
+#  Utility Functions
+function do_err(){
+   if [ $NEWTMPDIR ] ; then
+      if [ $KEEPTDIR ] ; then
+         cp -rp $TMPDIR $OUTDIR
+         [ $VERBOSE ] && echo "#Info:  Temp files copied to $OUTDIR/$TMPNAME"
+      fi
+      rm -rf $TMPDIR
+   else
+      if [ $KEEPTDIR ] ; then
+         [ $VERBOSE ] && echo "#Info:  Temp files kept in $TMPDIR"
+      fi
+   fi
+   [ $VERBOSE ] && echo "#Info:  Done"
+   exit $1
+}
+
+function version(){
+   #echo $PROGVERSION
+   runcmd "$MLCC/bin/clang --version"
+   exit 0
+}
+
+function runcmd(){
+   THISCMD=$1
+   if [ $DRYRUN ] ; then
+      echo "$THISCMD"
+   else
+      [ $VV ] && echo "$THISCMD"
+      $THISCMD
+      rc=$?
+      if [ $rc != 0 ] && [ $rc != 2 ] ; then
+         echo "ERROR:  The following command failed with return code $rc."
+         echo "        $THISCMD"
+      fi
+      ERROR_CODE=$rc
+   fi
+}
+
+# could x86_64
+#PPU_ARCH="llvmir"
+PPU_ARCH="x86-64"
+
+function parse_ppu_arch(){
+    ARG=$1
+    PPU_ARCH=${ARG##*=}
+    echo "[Opt Parse] --ppu-arch=$PPU_ARCH"
+    ## opt=${ARG%,*}
+    ## FIXME support multiple arch by  while [ $# -gt 0 ] ; do
+}
+
+function iscuda(){
+    ARG=$1
+    filetype=${ARG##*\.}
+    cuda_opt=${ARG%=*}
+    if [ "$filetype" == "cu" ] ; then
+      CUDACLANG=true
+      CUDA_INPUT=$ARG
+    elif [ "$filetype" == "o" ]; then
+      ACTION="LINK"
+      LINK_INPUT="${LINK_INPUT}$ARG "
+    elif [ "$filetype" == "a" ]; then
+      LINK_OPTS="${LINK_OPTS}$ARG "
+    elif [ "$filetype" == "c" ]; then
+      CUDACLANG=false
+    elif [ "$filetype" == "cc" ]; then
+      CUDACLANG=$CUDACLANG
+      CUDA_INPUT=$ARG
+    elif [ "$filetype" == "cpp" ]; then
+      CUDACLANG=$CUDACLANG
+      CUDA_INPUT=$ARG
+      found=`grep __global__ $ARG`
+      if [ "$found" != "" ] ; then
+        CUDACLANG=true
+      fi
+    elif [ "$cuda_opt" == "--cuda-gpu-arch" ]; then
+      GPU_ARCH=${ARG##*=}
+    elif [ "$cuda_opt" == "--ppu-arch" ]; then
+      parse_ppu_arch $ARG
+    else
+        linkopt=${ARG:0:2}
+        if [ "$linkopt" == "-l" ] ||
+           [ "$linkopt" == "-r" ] ||
+	   [ "$linkopt" == "-L" ] ; then
+            LINK_OPTS="${LINK_OPTS}$ARG "
+        else
+            CC_OPTS="$CC_OPTS $ARG"
+	fi
+    fi
+}
+
+function getdname(){
+   _DIR="$( cd "$( dirname "$1" )" && pwd )"
+   echo $_DIR
+}
+
+################################################
+#       The main code -----
+
+CUDACLANG=false
+INCLUDES=""
+LINK_INPUT=""
+LINK_OPTS=""
+LANG=""
+
+# FIXME change the bundle target to hip-ppu-mlvm
+#BUNDLE_TARGET_TRIPLE="hip-amdgcn-amd-amdhsa"
+BUNDLE_TARGET_TRIPLE="hip-ppu-mlvm"
+
+CC_OPTS=""
+GEN_DEBUG=""
+GPU_RDC=""
+ACTION="COMPILE_LINK"
+# ACTION could be COMPILE, COMPILE_LINK, LINK
+#  Argument processing
+while [ $# -gt 0 ] ; do
+   case "$1" in
+      -q)               QUIET=true;;
+      --quiet)          QUIET=true;;
+      -k) 		KEEPTDIR=true;;
+      -n) 		DRYRUN=true;;
+      -g) 		GEN_DEBUG="-g";;
+      -ll) 		GENLL=true;;
+      -noqp) 		NOQP=true;;
+      -noshared) 	NOSHARED=true;;
+      -I) 		INCLUDES="$INCLUDES -I $2"; shift ;;
+      -opt) 		LLVMOPT=$2; shift ;;
+      -o) 		OUTFILE=$2; shift ;;
+      -c) 		ACTION="COMPILE";;
+      --cuda-device-only) ACTION="GENCO";;
+      -M) 		ACTION="BUILDDEPEND";;
+      -fgpu-rdc)        GPU_RDC="-fgpu-rdc";;
+      -t)		TMPDIR=$2; shift ;;
+      -bclib)		EXTRABCLIB=$2; shift ;;
+      -cuda)            CUDACLANG=true;;
+      -x) 		LANG=$2; shift ;;
+      -mcpu)            LC_MCPU=$2; shift ;;
+      -mlcc)            MLCC=$2; shift ;;
+      -triple)          TARGET_TRIPLE=$2; shift ;;
+      -libgcn)          DEVICELIB=$2; shift ;;
+      -atmipath)        ATMI_PATH=$2; shift ;;
+      -cuda-path)       CUDA_PATH=$2; shift ;;
+      -h) 	        usage ;;
+      -help) 	        usage ;;
+      --help) 	        usage ;;
+      --version) 	version ;;
+      -v) 		VERBOSE=true;;
+      -vv) 		VV=true;;
+      *) 		iscuda $1 ;;
+   esac
+   shift
+done
+
+if [ "$LANG" == "hip" ] || [ "$LANG" == "cuda" ] ; then
+    CUDACLANG=true
+    #CC_OPTS="$CC_OPTS --hip-auto-headers=cuda_open"
+else
+    if [ "$LANG" != "" ] ; then
+        CC_OPTS="$CC_OPTS -x $LANG"
+    fi
+fi
+
+if [ "$MLCC_VERBOSE" == "2" ] ; then
+    VV=true
+    GENLL=true
+    KEEPTDIR=true
+fi
+
+CC_OPTS="$CC_OPTS $INCLUDES"
+echo "OUTFILE=$OUTFILE"
+echo "CC_OPTS=$CC_OPTS"
+echo "CUDACLANG=$CUDACLANG"
+echo "CUDA_INPUT=$CUDA_INPUT"
+# Parse LASTARG for directory, filename, and symbol name
+INDIR=$(getdname $CUDA_INPUT)
+FILENAME=${CUDA_INPUT##*/}
+FNAME=${FILENAME%.*}
+
+if [ -z $OUTFILE ] ; then
+#  Output file not specified so use input directory
+   OUTDIR=$INDIR
+   OUTFILE=${FNAME}.o
+else
+#  Use the specified OUTFILE
+   OUTDIR=$(getdname $OUTFILE)
+   OUTFILE=${OUTFILE##*/}
+   FNAME=${OUTFILE%.*}
+fi
+
+echo INDIR=$INDIR
+echo FILENAME=$FILENAME
+echo FNAME=$FNAME
+
+## if mcpu is not specficed,  it build for ppu
+GPU_ARCH=${GPU_ARCH:-$LC_MCPU}
+if [ ! $LC_MCPU ] || [ $LC_MCPU == "ppu" ] ; then
+   # Use the mygpu in pair with this script, no the pre-installed one.
+   #LC_MCPU=`$cdir/mygpu`
+   #if [ "$LC_MCPU" == "" ] ; then
+   #   LC_MCPU="gfx803"
+   #fi
+   ## TODO schi hard code for ppu
+   LC_MCPU="ppu"
+   GPU_ARCH="gfx600"
+fi
+
+if [ "$GEN_DEBUG" != "" ] ; then
+  LLVMOPT=0
+fi
+
+LLVMOPT=${LLVMOPT:-2}
+
+# for device it always -O2
+LLVMOPT_GPU=2
+
+if [ $CUDACLANG == "false" ] ; then
+   if [ $ACTION == "COMPILE" ]; then
+	echo "[verbose] It is not cuda source compiling"
+	echo "$MLCC/bin/clang++ -c $CC_OPTS $GEN_DEBUG $INDIR/$FILENAME -o $OUTDIR/$OUTFILE"
+	runcmd "$MLCC/bin/clang++ -c $CC_OPTS $GEN_DEBUG $INDIR/$FILENAME -o $OUTDIR/$OUTFILE"
+        exit 0
+   elif [ $ACTION == "COMPILE_LINK" ]; then
+	echo "[verbose] It is not cuda source compiling&link"
+	echo "$MLCC/bin/clang++  $CC_OPTS $GEN_DEBUG $INDIR/$FILENAME -o $OUTDIR/$OUTFILE"
+	runcmd "$MLCC/bin/clang++  $CC_OPTS $GEN_DEBUG $INDIR/$FILENAME -o $OUTDIR/$OUTFILE"
+        exit 0
+   elif [ $ACTION == "LINK" ]; then
+       echo "It is not Cuda Source and it is link action"
+   fi
+fi
+
+CLANG_DBGOPT_GPU=""
+DBGOPT_HOST=""
+if [ "$GEN_DEBUG" != "" ] ; then
+    CLANG_DBGOPT_GPU="-Xclang -debug-info-kind=limited -Xclang -dwarf-version=4"
+    DBGOPT_HOST="-debug-info-kind=limited -dwarf-version=4"
+fi
+
+#CC_OPTS+=" -D__CUDACC__=0"
+CUOPTS_GPU="$GPU_RDC --cuda-device-only -Wno-unused-value --hip-auto-headers=cuda_open -O$LLVMOPT_GPU --cuda-gpu-arch=$GPU_ARCH $CLANG_DBGOPT_GPU $CC_OPTS"
+CUOPTS_HOST="$GPU_RDC --cuda-host-only -c -Wno-unused-value --hip-auto-headers=cuda_open -O$LLVMOPT --cuda-gpu-arch=$GPU_ARCH $GEN_DEBUG $CC_OPTS"
+
+
+CUOPTS="$GPU_RDC -Wno-unused-value --hip-auto-headers=cuda_open -O$LLVMOPT --cuda-gpu-arch=$GPU_ARCH $CC_OPTS"
+#CUOPTS_HOST_NOGPU="$GPU_RDC -Wno-unused-value --hip-auto-headers=cuda_open -O$LLVMOPT $GEN_DEBUG $CC_OPTS"
+if [ "$GPU_RDC" == "" ] ; then
+    CUOPTS_LINK="$CC_OPTS"
+else
+    CUOPTS_LINK="--cuda-gpu-arch=$GPU_ARCH $CC_OPTS"
+fi
+
+if [ $VV ]  ; then
+   VERBOSE=true
+fi
+
+
+DEVICELIB=${DEVICELIB:-$MLCC/lib/libdevice}
+# Check if user supplied libgcn has libdevice convention
+GCNDEVICE=`echo $DEVICELIB | grep libdevice`
+
+
+DEVICELIBDIR=$DEVICELIB/lib
+#if [ -z $GCNDEVICE ]; then
+#  # Here a User supplied libgcn does not have libdevice convention
+#  DEVICELIBDIR=$DEVICELIB
+#else
+#  # This is the default path. bc files are found with libdevice convention
+#  # $MLCC/lib/libdevice/$GPU_ARCH/
+#  DEVICELIBDIR=$DEVICELIB/$GPU_ARCH
+#fi
+
+BCFILES=""
+
+if [ $LC_MCPU == "ppu" ]; then
+# FIXME change to cuda2ppu.ppu.bc
+BCFILES="$BCFILES $DEVICELIBDIR/cuda2ppu.ppu.bc"
+BCFILES="$BCFILES $DEVICELIBDIR/cudamath.amdgcn.bc"
+BCFILES="$BCFILES $DEVICELIBDIR/hip.amdgcn.bc"
+BCFILES="$BCFILES $DEVICELIBDIR/ppu--.bc"
+#BCFILES="$BCFILES $DEVICELIBDIR/subnormal_disable.bc"
+#BCFILES="$BCFILES $DEVICELIBDIR/subnormal_use_default.bc"
+else
+BCFILES="$BCFILES $DEVICELIBDIR/cuda2gcn.amdgcn.bc"
+BCFILES="$BCFILES $DEVICELIBDIR/hc.amdgcn.bc"
+BCFILES="$BCFILES $DEVICELIBDIR/opencl.amdgcn.bc"
+BCFILES="$BCFILES $DEVICELIBDIR/ocml.amdgcn.bc"
+BCFILES="$BCFILES $DEVICELIBDIR/ockl.amdgcn.bc"
+MCPU_VERSION=${LC_MCPU##gfx}
+BCFILES="$BCFILES $DEVICELIBDIR/oclc_isa_version_$MCPU_VERSION.amdgcn.bc"
+if [ -f $ATMI_PATH/lib/libdevice/$LC_MCPU/libatmi.bc ]; then
+    BCFILES="$BCFILES $ATMI_PATH/lib/libdevice/$LC_MCPU/libatmi.bc"
+else
+  if [ -f $DEVICELIBDIR/libatmi.bc ]; then
+    BCFILES="$BCFILES $DEVICELIBDIR/libatmi.bc"
+  fi
+fi
+
+if [ $EXTRABCLIB ] ; then
+   if [ -f $EXTRABCLIB ] ; then
+#     EXTRABCFILE will force QP off so LINKOPTS not used.
+      BCFILES="$EXTRABCLIB $BCFILES"
+   else
+      echo "ERROR: Environment variable EXTRABCLIB is set to $EXTRABCLIB"
+      echo "       File $EXTRABCLIB does not exist"
+      exit $DEADRC
+   fi
+fi
+fi
+
+
+CMD_CLC_GPU=${CMD_CLC:-clang++ $CUOPTS_GPU $INCLUDES}
+CMD_CLC_HOST=${CMD_CLC:-clang++ $CUOPTS_HOST $INCLUDES}
+CMD_CLC=${CMD_CLC:-clang++ $CUOPTS $INCLUDES}
+#CMD_CLC_HOST_NOGPU=${CMD_CLC:-clang++ $CUOPTS_HOST_NOGPU $INCLUDES}
+CMD_CLC_LINK=${CMD_CLC_LINK:-clang++ $CUOPTS_LINK $LINK_OPTS $INCLUDES}
+
+CMD_LLA=${CMD_LLA:-llvm-dis}
+CMD_ASM=${CMD_ASM:-llvm-as}
+CMD_LLL=${CMD_LLL:-llvm-link}
+CMD_OPT=${CMD_OPT:-opt -O$LLVMOPT -mcpu=$GPU_ARCH -amdgpu-annotate-kernel-features}
+CMD_SELECT_LINK=${CMD_SELECT_LINK:-clang-build-select-link}
+
+if [ $LC_MCPU == "ppu" ]; then
+CMD_LLC=${CMD_LLC:-$MLCC/bin/genco --ppu-arch=$PPU_ARCH}
+else
+TARGET_TRIPLE=${TARGET_TRIPLE:-amdgcn-amd-amdhsa}
+CMD_LLC=${CMD_LLC:-$MLCC/bin/llc -mtriple ${TARGET_TRIPLE} -mcpu=$GPU_ARCH -filetype=obj}
+fi
+
+# HIP_LINK_SCRIPT=${HIP_LINK_SCRIPT:-$THIS_SCRIPT_DIR/hip_link.lk}
+CMD_BUNDLER=${CMD_BUNDLER:-clang-offload-bundler}
+
+
+ERROR_CODE=1
+## prepare the temporary directory
+TMPNAME="mlcc-tmp-$$"
+TMPDIR=${TMPDIR:-/tmp/$TMPNAME}
+if [ -d $TMPDIR ] ; then
+   KEEPTDIR=true
+else
+   if [ $DRYRUN ] ; then
+      echo "mkdir -p $TMPDIR"
+   else
+      mkdir -p $TMPDIR
+      NEWTMPDIR=true
+   fi
+fi
+# Be sure not to delete the output directory
+if [ $TMPDIR == $OUTDIR ] ; then
+   KEEPTDIR=true
+fi
+if [ ! -d $TMPDIR ] && [ ! $DRYRUN ] ; then
+   echo "ERROR:  Directory $TMPDIR does not exist or could not be created"
+   exit $ERROR_CODE
+fi
+if [ ! -d $OUTDIR ] && [ ! $DRYRUN ]  ; then
+   echo "ERROR:  The output directory $OUTDIR does not exist"
+   exit $ERROR_CODE
+fi
+
+#  Print Header block
+if [ $VERBOSE ] ; then
+   echo "#   "
+   echo "#Info:  MLCC Path:	$MLCC"
+   echo "#Info:  Input file:	$INDIR/$FILENAME"
+   echo "#Info:  Code object:	$OUTDIR/$OUTFILE"
+   [ $KEEPTDIR ] &&  echo "#Info:  Temp dir:	$TMPDIR"
+   echo "#   "
+fi
+
+# Run 4 steps, clang,link,opt,llc
+
+# compile only and no_rdc: run device link
+# compile&link and rdc   : run device link/bundle to fb and linker script
+# compile&link and no_rdc: run device link/bundle to fb,  and compile host object  with -fcuda-include-gpubinary, and normal link
+# link : if $GPU_ARCH is provide, need unbunder and run device link,
+
+if [ $ACTION == "BUILDDEPEND" ] ; then
+    [ $VERBOSE ] && echo "
+    #Step:  cuda-clang	build dependency  ..."
+    runcmd "$MLCC/bin/$CMD_CLC_HOST -o $OUTDIR/$OUTFILE $INDIR/$FILENAME"
+    echo "compile done"
+    exit 0
+fi
+
+SELECT_LINK_BC=""
+# compile only or compile&link
+if [ $ACTION != "LINK" ] ; then
+    [ $VERBOSE ] && echo "
+    #Step:  cuda-clang	cu --> bc  ..."
+    runcmd "$MLCC/bin/$CMD_CLC_GPU -c -emit-llvm -o $TMPDIR/$FNAME.bc $INDIR/$FILENAME"
+    SELECT_LINK_BC=$TMPDIR/$FNAME.bc
+
+    if [ $GENLL ] ; then
+        [ $VERBOSE ] && echo "[verbose]:  Disassemble	bc --> ll ..."
+        runcmd "$MLCC/bin/$CMD_LLA -o $TMPDIR/$FNAME.ll $TMPDIR/$FNAME.bc"
+        if [ "$OUTDIR" != "$TMPDIR" ] ; then
+           runcmd "cp $TMPDIR/$FNAME.ll $OUTDIR/$FNAME.ll"
+        fi
+    fi
+
+    # if only compile and use rdc, just generarate bundle object and exit
+    if [ $ACTION == "COMPILE" ] && [ "$GPU_RDC" != "" ] ; then
+        [ $VERBOSE ] && echo "
+	#Step:	compile host to object ..."
+        runcmd "$MLCC/bin/$CMD_CLC_HOST -o $OUTDIR/$FNAME.host.o $INDIR/$FILENAME"
+        runcmd "$MLCC/bin/$CMD_BUNDLER -type=o -targets=$BUNDLE_TARGET_TRIPLE-$GPU_ARCH,host-x86_64-unknown-linux-gnu -outputs=$OUTDIR/$OUTFILE -inputs=$TMPDIR/$FNAME.bc,$OUTDIR/$FNAME.host.o"
+        echo "compile done"
+        exit 0
+    fi
+fi
+
+# link only
+device_obj=""
+host_obj=""
+if [ $ACTION == "LINK" ] ; then
+    if [ "$GPU_RDC" != "" ] ; then
+        [ $VERBOSE ] && echo "
+	#Step: unbunder input object and select link 	.o --> bc  ..."
+        for obj_file in $LINK_INPUT ; do
+            obj_name=${obj_file%.*}
+    	    runcmd "$MLCC/bin/$CMD_BUNDLER -type=o -targets=host-x86_64-unknown-linux-gnu,$BUNDLE_TARGET_TRIPLE-$GPU_ARCH -inputs=$obj_file -outputs=$obj_name.host.o,$obj_name.$LC_MCPU.o -unbundle"
+	    device_objs="$device_objs $obj_name.$LC_MCPU.o"
+	    host_objs="$host_objs $obj_name.host.o"
+        done
+        runcmd "$MLCC/bin/$CMD_SELECT_LINK $device_objs $BCFILES -o ${OUTFILE}_select.bc"
+        SELECT_LINK_BC=${OUTFILE}_select.bc
+    else
+        [ $VERBOSE ] && echo "
+	#Step: just linke input object 	.o --> exe  ..."
+        CMD_LD="$MLCC/bin/$CMD_CLC_LINK $LINK_INPUT -o $OUTDIR/$OUTFILE"
+        echo  "$CMD_LD"
+        runcmd "$CMD_LD"
+	echo "Linking Done"
+	exit
+        #CMD_LD=`$MLCC/bin/$CMD_CLC_LINK -o $OUTDIR/$OUTFILE $LINK_INPUT -### 2>&1 |tail -n 1|sed -e s/\"//g`
+	#echo $CMD_LD
+        #runcmd $CMD_LD
+	exit
+    fi
+fi
+
+
+# device link
+LNKD_BC="$TMPDIR/$FNAME.lnkd.bc"
+LNKD_LL="$TMPDIR/$FNAME.lnkd.ll"
+[ $VERBOSE ] && echo "
+#Step:  Link(llvm-link)	bc --> lnkd.bc ..."
+    runcmd "$MLCC/bin/$CMD_LLL $SELECT_LINK_BC $BCFILES -o $LNKD_BC"
+    if [ $GENLL ] ; then
+         [ $VV ] && echo
+         [ $VERBOSE ] && echo "[verbose]:  Disassemble	lnkd.bc --> lnkd.ll ..."
+         runcmd "$MLCC/bin/$CMD_LLA -o $LNKD_LL $LNKD_BC"
+         if [ "$OUTDIR" != "$TMPDIR" ] ; then
+            runcmd "cp $LNKD_LL $OUTDIR/$FNAME.lnkd.ll"
+         fi
+    fi
+
+FINAL_BC="$TMPDIR/$FNAME.final.bc"
+FINAL_LL="$TMPDIR/$FNAME.final.ll"
+    if [ $LLVMOPT != 0 ] ; then
+[ $VERBOSE ] && echo "
+#Step:  Optimize(opt)	lnkd.bc --> final.bc -O$LLVMOPT ..."
+       runcmd "$MLCC/bin/$CMD_OPT -o $FINAL_BC $LNKD_BC"
+       if [ $GENLL ] ; then
+          [ $VV ] && echo
+          [ $VERBOSE ] && echo "[verbose]:  Disassemble	final.bc --> final.ll ..."
+          runcmd "$MLCC/bin/$CMD_LLA -o $FINAL_LL $FINAL_BC"
+          if [ "$OUTDIR" != "$TMPDIR" ] ; then
+            runcmd "cp $FINAL_LL $OUTDIR/$FNAME.final.ll"
+          fi
+       fi
+       LLC_BC=$FINAL_BC
+    else
+       # No optimization so generate object for lnkd bc.
+       LLC_BC=$LNKD_BC
+    fi
+
+NO_KERNEL_CODE=false
+[ $VERBOSE ] && echo "
+#Step:  llc	final.bc --> gcn ..."
+    if [ $LC_MCPU == "ppu" ]; then
+        export CO_WRITER=$THIS_SCRIPT_DIR/ppu_co_writer
+        if [ $KEEPTDIR ]; then
+            runcmd "$CMD_LLC -k -o $TMPDIR/$FNAME.gcn $LLC_BC"
+        else
+            runcmd "$CMD_LLC -o $TMPDIR/$FNAME.gcn $LLC_BC"
+        fi
+    else
+        runcmd "$CMD_LLC -o $TMPDIR/$FNAME.gcn $LLC_BC"
+    fi
+    if [ $ERROR_CODE == 2 ]; then
+        NO_KERNEL_CODE=true
+    fi
+    runcmd "cp $LLC_BC $OUTDIR"
+
+
+FATBIN=$OUTDIR/$FNAME.$LC_MCPU.fb
+if [ "$NO_KERNEL_CODE" == "false" ]; then
+[ $VERBOSE ] && echo "
+#Step:	ld.lld		gcn --> hsaco ..."
+    if [ $NOSHARED ] ; then
+        SHAREDARG=""
+    else
+        SHAREDARG="-shared"
+    fi
+    #  FIXME:  Why does shared sometimes cause the -fPIC problem ?
+    #runcmd "$MLCC/bin/ld.lld $TMPDIR/$FNAME.gcn --no-undefined $SHAREDARG -o $OUTDIR/$OUTFILE"
+    runcmd "$MLCC/bin/ld.lld $TMPDIR/$FNAME.gcn --no-undefined $SHAREDARG -o $OUTDIR/$FNAME.$LC_MCPU.o"
+
+    if [ $ACTION == "GENCO" ]; then
+        runcmd "$MLCC/bin/$CMD_BUNDLER -type=o -targets=host-x86_64-unknown-linux-gnu,$BUNDLE_TARGET_TRIPLE-$GPU_ARCH -inputs=/dev/null,$OUTDIR/$FNAME.$LC_MCPU.o -outputs=$OUTDIR/$OUTFILE"
+	# TODO use better name
+        # runcmd "$MLCC/bin/$CMD_BUNDLER -type=o -targets=host-x86_64-unknown-linux-gnu,hip-amdgcn-amd-amdhsa-ppu -inputs=/dev/null,$OUTDIR/$FNAME.$LC_MCPU.o -outputs=$OUTDIR/$OUTFILE"
+        echo "GENCO Done"
+        exit
+    else
+        runcmd "$MLCC/bin/$CMD_BUNDLER -type=o -targets=host-x86_64-unknown-linux-gnu,$BUNDLE_TARGET_TRIPLE-$GPU_ARCH -inputs=/dev/null,$OUTDIR/$FNAME.$LC_MCPU.o -outputs=$FATBIN"
+    fi
+else
+  touch $FATBIN
+fi
+
+
+if [ $ACTION != "LINK" ] ; then
+[ $VERBOSE ] && echo "
+#Step:	compile host ..."
+    if [ "$GPU_RDC" == "" ] ; then
+	#if [ "$NO_KERNEL_CODE" == "false" ] ; then
+        #runcmd "$MLCC/bin/$CMD_CLC_HOST -o $OUTDIR/$FNAME.host.o $INDIR/$FILENAME -cc1 -fcuda-include-gpubinary $FATBIN"
+        CMD_CLC_HOST=`$MLCC/bin/$CMD_CLC -o $OUTDIR/$OUTFILE $INDIR/$FILENAME -### 2>&1 |grep fcuda-include-gpubinary |sed -e s/\"//g -e "s#-o \S*.o#-o $OUTDIR/$FNAME.host.o#"`
+        #else
+        #CMD_CLC_HOST=`$MLCC/bin/$CMD_CLC -o $OUTFILE $INDIR/$FILENAME -### 2>&1 |grep fcuda-include-gpubinary |sed -e s/\"//g -e "s#-o \S*.o#-o $OUTDIR/$FNAME.host.o#"`
+	#fi
+	CMD_CLC_HOST=`echo $CMD_CLC_HOST |sed -e "s#/tmp/\S*hipfb#$FATBIN#"`
+	CMD_CLC_HOST=`echo $CMD_CLC_HOST |sed -e "s#-cc1#-cc1 $DBGOPT_HOST #"`
+	echo $CMD_CLC_HOST
+        runcmd "$CMD_CLC_HOST"
+    elif [ "$GPU_RDC" != "" ] ; then
+        runcmd "$MLCC/bin/$CMD_CLC_HOST -o $OUTDIR/$FNAME.host.o $INDIR/$FILENAME "
+    fi
+fi
+
+if [ $ACTION == "COMPILE" ] ; then
+    [ "$GPU_RDC" != "" ] && echo "should not be here, line 402" && exit
+    runcmd "mv $OUTDIR/$FNAME.host.o $OUTDIR/$OUTFILE"
+    echo "Compile only with no gpu rdc done"
+    exit
+fi
+
+HOST_LINK_INPUT=$INDIR/$FILENAME
+HOST_LINK_OUTPUT=$OUTDIR/$FNAME.host.o
+
+if [ $ACTION == "LINK" ] ; then
+    HOST_LINK_INPUT=$host_objs
+    HOST_LINK_OUTPUT=$host_objs
+fi
+
+[ $VERBOSE ] && echo "
+#Step:	linking host&device ..."
+    echo "Debug: "
+    echo "HOST_LINK_INPUT: $HOST_LINK_INPUT"
+    echo "HOST_LINK_OUTPUT: $HOST_LINK_OUTPUT"
+    echo "[Verbose] bofore modify link cmmand is:"
+    echo "$MLCC/bin/$CMD_CLC $LINK_OPTS -o $OUTDIR/$OUTFILE $HOST_LINK_INPUT"
+    CMD_LD=`$MLCC/bin/$CMD_CLC $LINK_OPTS -o $OUTDIR/$OUTFILE $HOST_LINK_INPUT -### 2>&1 |tail -n 1|sed -e s/\"//g`
+    CMD_LD=`echo $CMD_LD |sed -e "s#/tmp/\S*\.o #$HOST_LINK_OUTPUT #"`
+    # in case multipe input object file
+    CMD_LD=`echo $CMD_LD |sed -e "s#/tmp/\S*\.o##g"`
+    echo "[Verbose] the modify link cmmand is:"
+    echo $CMD_LD
+    if [ "$GPU_RDC" != "" ]; then
+        [ $VERBOSE ] && echo "#[verbose]: rdc linking:	replace linker command which used in ld ..."
+        LD_SCRIPT=${CMD_LD##*-T }
+        LD_SCRIPT=`echo $LD_SCRIPT | cut -d "\"" -f2`
+        echo $LD_SCRIPT
+        echo "
+        TARGET(binary)
+          INPUT($FATBIN)
+          SECTIONS
+          {
+            .hip_fatbin :
+            ALIGN(0x10)
+            {
+               PROVIDE_HIDDEN(__hip_fatbin = .);
+               $FATBIN
+            }
+          }
+        INSERT BEFORE .data
+        "  > $LD_SCRIPT
+    fi
+    #if [ -f "$HOST_LINK_OUTPUT" ]; then
+        [ $VERBOSE ] && echo "#[verbose]: now linking .."
+        #echo $CMD_LD
+        `$CMD_LD`
+        #runcmd $CMD_LD
+	echo "Link Done"
+    #else
+    #    echo "ERROR, the host object is not generated"
+    #fi
+
+
+## get the linker script from clang dry run
+#echo "$MLCC/bin/$CMD_CLC -o $OUTDIR/$OUTFILE $INDIR/$FILENAME"
+#CMD_LD=`$MLCC/bin/$CMD_CLC -o $OUTDIR/$OUTFILE $INDIR/$FILENAME -### 2>&1 |tail -n 1|sed -e s/\"//g -e "s#/tmp/$FNAME\S*o #$OUTDIR/$FNAME.host.o #"`
+
+#[ $VERBOSE ] && echo "#Step:	linking host&device ..."
+#echo $CMD_LD
+#LD_SCRIPT=${CMD_LD##*-T }
+#LD_SCRIPT=`echo $LD_SCRIPT | cut -d "\"" -f2`
+#echo $LD_SCRIPT
+#echo "
+#TARGET(binary)
+#  INPUT($OUTDIR/$FNAME.$LC_MCPU.fb)
+#  SECTIONS
+#  {
+#    .hip_fatbin :
+#    ALIGN(0x10)
+#    {
+#       PROVIDE_HIDDEN(__hip_fatbin = .);
+#       $OUTDIR/$FNAME.$LC_MCPU.fb
+#    }
+#  }
+#INSERT BEFORE .data
+#"  > $LD_SCRIPT
+#
+#if [ -f "$OUTDIR/$FNAME.host.o" ]; then
+#    `$CMD_LD`
+#else
+#    echo "ERROR, the host object is not generated"
+#fi
+#
+#fi

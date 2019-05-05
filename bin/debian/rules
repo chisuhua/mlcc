@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+#export DH_VERBOSE=1
+%:
+	dh $@ --with cli
+
+override_dh_auto_configure:
+	dh_auto_configure -- --prefix=/opt
+
+override_dh_shlibdeps:
+	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info -l/usr/local/hsa/lib -l/opt/rocm/hcc2/lib

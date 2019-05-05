@@ -1,0 +1,17 @@
+Source: hcc2
+Maintainer: Greg Rodgers <Gregory.Rodgers@amd.com>
+Section: misc
+Priority: optional
+Standards-Version: 3.9.5
+Build-Depends: debhelper (>= 9) 
+Build-Depends-Indep: cli-common-dev (>= 0.8)
+Homepage: http://github.com/RadeonOpenCompute
+
+Package: hcc2 
+Architecture: amd64
+#Depends: ${shlibs:Depends},${misc:Depends}
+Depends: ${misc:Depends}
+Description: HCC2 is an experimental compiler for OpenMP 4.5 using
+ LLVM 6.0 for offloading to either Radeon GPUs or Nvidia GPUs. 
+ HCC2 requires either libamdgpu or cuda or both.
+ Dependencies are not specified here for flexibility. 

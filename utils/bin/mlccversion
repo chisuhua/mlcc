@@ -1,0 +1,10 @@
+#!/bin/bash
+#
+#  mlccversion: Print the current version of mlcc that is installed and active
+#
+# This string is changed by cmake when building and installing mlcc utils.
+PROGVERSION="X.Y-Z"
+#
+
+echo $PROGVERSION
+exit 0

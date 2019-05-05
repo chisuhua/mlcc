@@ -1,0 +1,14 @@
+GPU-STREAM
+Version: 2.1
+Implementation: CUDA
+Running kernels 100 times
+Precision: double
+Array size: 268.4 MB (=0.3 GB)
+Total size: 805.3 MB (=0.8 GB)
+Using CUDA device Quadro K4000
+Driver: 7050
+Function    MBytes/sec  Min (sec)   Max         Average     
+Copy        96289.335   0.00558     0.00568     0.00562     
+Mul         85680.238   0.00627     0.00629     0.00628     
+Add         98556.804   0.00817     0.00837     0.00824     
+Triad       96891.853   0.00831     0.00876     0.00846     
