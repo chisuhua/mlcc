@@ -168,4 +168,10 @@ install(PROGRAMS
    ${CMAKE_CURRENT_SOURCE_DIR}/bin/fix_wrapper_kernel.py
    DESTINATION "bin")
 
+#option(YAML_CPP_BUILD_TESTS OFF)
+#option(YAML_CPP_BUILD_TOOLS  OFF)
+#option(YAML_CPP_BUILD_CONTRIB OFF)
+#option(YAML_CPP_INSTALL OFF)
+
+
 add_subdirectory(external/yaml-cpp)

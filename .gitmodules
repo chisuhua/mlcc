@@ -1,0 +1,6 @@
+[submodule "utils/external/msgpack-c"]
+	path = utils/external/msgpack-c
+	url = https://github.com/msgpack/msgpack-c.git
+[submodule "utils/external/yaml-cpp"]
+	path = utils/external/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
