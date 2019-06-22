@@ -17,6 +17,7 @@ p_triple = re.compile(r'^target triple')
 p_attr_writeonly_ = re.compile(r'^(attributes #.).*writeonly')
 p_attr = re.compile(r'^attributes #.')
 p_attr_end = re.compile(r'^!llvm.module.flags')
+p_meta_line = re.compile(r'^!\d')
 
 #p_define = re.compile(r'^define')
 
@@ -46,8 +47,9 @@ with open(in_filename) as inf:
       #line = line.replace('addrspace(4)', '')
       #line = line.replace('addrspace(5)', '')
       line = line.replace('addrspacecast', 'bitcast')
-      for kernel in kernels:
-          line = line.replace(kernel, kernel + "_kernel")
+      if not p_meta_line.findall(line):
+          for kernel in kernels:
+              line = line.replace(kernel, kernel + "_kernel")
       out.write(line)
 
 

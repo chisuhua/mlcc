@@ -294,6 +294,7 @@ DEVICELIBDIR=$DEVICELIB/lib
 #fi
 
 BCFILES=""
+DEVICE_BUILTIN_OBJ=""
 
 if [ $LC_MCPU == "ppu" ]; then
 # FIXME change to cuda2ppu.ppu.bc
@@ -303,6 +304,10 @@ BCFILES="$BCFILES $DEVICELIBDIR/hip.amdgcn.bc"
 BCFILES="$BCFILES $DEVICELIBDIR/ppu--.bc"
 #BCFILES="$BCFILES $DEVICELIBDIR/subnormal_disable.bc"
 #BCFILES="$BCFILES $DEVICELIBDIR/subnormal_use_default.bc"
+#DEVICE_BUILTIN_OBJ="$DEVICE_BUILTIN_OBJ $DEVICELIBDIR/acosw_device.o"
+#DEVICE_BUILTIN_OBJ="$DEVICE_BUILTIN_OBJ $DEVICELIBDIR/aco_device.o"
+DEVICE_BUILTIN_OBJ="$DEVICE_BUILTIN_OBJ $ISA_EXECUTOR_PATH/acosw_device.o"
+DEVICE_BUILTIN_OBJ="$DEVICE_BUILTIN_OBJ $ISA_EXECUTOR_PATH/cpu_builtin.o"
 else
 BCFILES="$BCFILES $DEVICELIBDIR/cuda2gcn.amdgcn.bc"
 BCFILES="$BCFILES $DEVICELIBDIR/hc.amdgcn.bc"
@@ -530,7 +535,7 @@ if [ "$NO_KERNEL_CODE" == "false" ]; then
     fi
     #  FIXME:  Why does shared sometimes cause the -fPIC problem ?
     #runcmd "$MLCC/bin/ld.lld $TMPDIR/$FNAME.gcn --no-undefined $SHAREDARG -o $OUTDIR/$OUTFILE"
-    runcmd "$MLCC/bin/ld.lld $TMPDIR/$FNAME.gcn --no-undefined $SHAREDARG -o $OUTDIR/$FNAME.$LC_MCPU.o"
+    runcmd "$MLCC/bin/ld.lld $DEVICE_BUILTIN_OBJ $TMPDIR/$FNAME.gcn --no-undefined $SHAREDARG -o $OUTDIR/$FNAME.$LC_MCPU.o"
 
     if [ $ACTION == "GENCO" ]; then
         runcmd "$MLCC/bin/$CMD_BUNDLER -type=o -targets=host-x86_64-unknown-linux-gnu,$BUNDLE_TARGET_TRIPLE-$GPU_ARCH -inputs=/dev/null,$OUTDIR/$FNAME.$LC_MCPU.o -outputs=$OUTDIR/$OUTFILE"
