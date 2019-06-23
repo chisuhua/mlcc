@@ -114,24 +114,46 @@ echo `pwd`
 echo $MLCC/bin/opt -O3 $FNAME.layout.bc  -o $FNAME.opt.bc
 $MLCC/bin/opt -O3 $FNAME.layout.bc  -o $FNAME.opt.bc
 
-echo $MLCC/bin/opt -load ${MLCC}/lib/LLVMFuncWapper.so -FuncWapper $FNAME.opt.bc  -o $FNAME.wrapper.bc
-$MLCC/bin/opt -load ${MLCC}/lib/LLVMFuncWapper.so -FuncWapper $FNAME.opt.bc  -o $FNAME.wrapper.bc
+#--------------------------  add kernel wrapper ----------------------- 
+#echo $MLCC/bin/opt -load ${MLCC}/lib/LLVMFuncWapper.so -FuncWapper $FNAME.opt.bc  -o $FNAME.wrapper.bc
+#$MLCC/bin/opt -load ${MLCC}/lib/LLVMFuncWapper.so -FuncWapper $FNAME.opt.bc  -o $FNAME.wrapper.bc
+echo $MLCC/bin/opt -load ${ISA_EXECUTOR_PATH}/libcpuKernelPass.so -cpuKernel $FNAME.opt.bc  -o $FNAME.wrapper.bc
+$MLCC/bin/opt -load ${ISA_EXECUTOR_PATH}/libcpuKernelPass.so -cpuKernel $FNAME.opt.bc  -o $FNAME.wrapper.bc
 
 echo $MLCC/bin/$CMD_LLA -o $FNAME.wrapper.ll $FNAME.wrapper.bc
 $MLCC/bin/$CMD_LLA -o $FNAME.wrapper.ll $FNAME.wrapper.bc
 
-echo python $THIS_SCRIPT_DIR/fix_wrapper_kernel.py $FNAME.wrapper.ll $FNAME.wrapper.fix.ll
-python $THIS_SCRIPT_DIR/fix_wrapper_kernel.py $FNAME.wrapper.ll $FNAME.wrapper.fix.ll
-$MLCC/bin/$CMD_ASM -o $FNAME.wrapper.fix.bc $FNAME.wrapper.fix.ll
+#--------------------------  add inline kernel into wrapper ----------------------- 
+echo $MLCC/bin/opt -always-inline $FNAME.wrapper.bc  -o $FNAME.inline.bc
+$MLCC/bin/opt -always-inline $FNAME.wrapper.bc  -o $FNAME.inline.bc
+
+echo $MLCC/bin/$CMD_LLA -o $FNAME.inline.ll $FNAME.inline.bc
+$MLCC/bin/$CMD_LLA -o $FNAME.inline.ll $FNAME.inline.bc
+
+#--------------------------  remove old kernel  ----------------------- 
+echo $MLCC/bin/opt -load ${ISA_EXECUTOR_PATH}/libcpuKernelRemovePass.so -removeKernel $FNAME.inline.bc  -o $FNAME.remove.bc
+$MLCC/bin/opt -load ${ISA_EXECUTOR_PATH}/libcpuKernelRemovePass.so -removeKernel $FNAME.inline.bc  -o $FNAME.remove.bc
+
+echo $MLCC/bin/$CMD_LLA -o $FNAME.remove.ll $FNAME.remove.bc
+$MLCC/bin/$CMD_LLA -o $FNAME.remove.ll $FNAME.remove.bc
+
+#--------------------------  fixup: connect kernel_ctx to buildin_read_register --- 
+echo python $THIS_SCRIPT_DIR/fix_wrapper_kernel.py $FNAME.remove.ll $FNAME.remove.fix.ll
+python $THIS_SCRIPT_DIR/fix_wrapper_kernel.py $FNAME.remove.ll $FNAME.remove.fix.ll
+
+echo $MLCC/bin/$CMD_ASM -o $FNAME.final.bc $FNAME.remove.fix.ll
+$MLCC/bin/$CMD_ASM -o $FNAME.final.bc $FNAME.remove.fix.ll
+
+
 
 if [ "$PPU_ARCH" == "llvmir" ]; then
   # LLVMir use rapper.fix.bc as input
-  echo $CO_WRITER --arch=llvmir --input=$FNAME.wrapper.fix.bc --output=$OUTFILE --meta=$META_FILE
-  $CO_WRITER --arch=llvmir --input=$FNAME.wrapper.fix.bc --output=$OUTFILE --meta=$META_FILE
+  echo $CO_WRITER --arch=llvmir --input=$FNAME.final.bc --output=$OUTFILE --meta=$META_FILE
+  $CO_WRITER --arch=llvmir --input=$FNAME.final.bc --output=$OUTFILE --meta=$META_FILE
 else
   #OBJFILE X86_CMD_LLC will generate $X86_OBJFILE from wrpper.fix.bc
-  echo $X86_CMD_LLC $FNAME.wrapper.fix.bc
-  $X86_CMD_LLC $FNAME.wrapper.fix.bc
+  echo $X86_CMD_LLC $FNAME.final.bc
+  $X86_CMD_LLC $FNAME.final.bc
 
   echo $CO_WRITER --arch=x86-64 --input=$X86_OBJFILE --output=$OUTFILE --meta=$META_FILE
   $CO_WRITER --arch=x86-64 --input=$X86_OBJFILE --output=$OUTFILE --meta=$META_FILE
