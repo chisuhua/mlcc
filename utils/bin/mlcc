@@ -283,7 +283,7 @@ DEVICELIB=${DEVICELIB:-$MLCC/lib/libdevice}
 GCNDEVICE=`echo $DEVICELIB | grep libdevice`
 
 
-DEVICELIBDIR=$DEVICELIB/lib
+DEVICELIBDIR=$DEVICELIB
 #if [ -z $GCNDEVICE ]; then
 #  # Here a User supplied libgcn does not have libdevice convention
 #  DEVICELIBDIR=$DEVICELIB

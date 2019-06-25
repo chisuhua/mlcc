@@ -8,17 +8,11 @@
 #
 # See the help text below, run 'build_llvm.sh -h' for more information. 
 #
-# The default install location is /usr/local/icorex/ixcc/ixcc_0.1.0. You can override this by
-# setting environment variables IXCC and IXCC_VERSION.
-#
-# See the help text below, run 'build_ixcc.sh -h' for more information.
 #
 THIS_SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Do not edit this script to change these values. 
 # Simply set the environment variables to override these defaults
-#IXCC=${IXCC:-/usr/local/icorex/ixcc}
-# IXCC_VERSION=${IXCC_VERSION:-"0.1-0"}
 
 MLCC_REPOS=${MLCC_REPOS:-$THIS_SCRIPT_DIR/../..}
 #MLCC_REPOS=${MLCC_REPOS:-/home/$USER/git/hcc2}
