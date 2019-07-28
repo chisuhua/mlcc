@@ -75,9 +75,9 @@ if [ ! -d $UTILS_DIR ] ; then
    exit 1
 fi
 
-if [ ! -f $HCC2/bin/clang ] ; then
-   echo "ERROR:  Missing file $HCC2/bin/clang"
-   echo "        Build the HCC2 llvm compiler in $HCC2 first"
+if [ ! -f $MLCC/bin/clang ] ; then
+   echo "ERROR:  Missing file $MLCC/bin/clang"
+   echo "        Build the MLCC llvm compiler in $MLCC first"
    echo "        This is needed to build the utilities"
    echo " "
    exit 1
