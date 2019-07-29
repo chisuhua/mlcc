@@ -42,6 +42,7 @@ else()
   error(" Could not find an mlcc version of LLVM.")
 endif()
 
+
 set(MLCC_DIR_FOUND ${LLVM_DIR})
 set(MLCC_INSTALL_PREFIX ${LLVM_INSTALL_PREFIX})
 set(MLCC_MAIN_INCDIR ${LLVM_BUILD_MAIN_INCLUDE_DIR})
@@ -65,6 +66,21 @@ mark_as_advanced(
   MLCC_INCDIR
   MLCC_LIBDIR
   MLCC_MAIN_INCDIR)
+
+execute_process(COMMAND $ENV{MLCC}/bin/llvm-config --includedir
+	OUTPUT_VARIABLE LLVM_SRC_INCLUDE
+	)
+if (LLVM_SRC_INCLUDE)
+  message("")
+  message(STATUS "     LLVM LLVM_SRC_INCLUDE: ${LLVM_SRC_INCLUDE}")
+  message("")
+else()
+  message("")
+  message("  ERROR:  Could not find an MLCC version of LLVM.")
+  message("")
+  error(" Could not find include dir from llvm-config --includedir.")
+endif()
+include_directories(${LLVM_SRC_INCLUDE})
 
 string(LENGTH ${LLVM_PACKAGE_VERSION} vlen)
 math(EXPR vstart "${vlen}-5")
