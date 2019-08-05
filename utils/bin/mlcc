@@ -261,6 +261,7 @@ if [ "$GEN_DEBUG" != "" ] ; then
 fi
 
 #CC_OPTS+=" -D__CUDACC__=0"
+
 CUOPTS_GPU="$GPU_RDC --cuda-device-only -Wno-unused-value --hip-auto-headers=cuda_open -O$LLVMOPT_GPU --cuda-gpu-arch=$GPU_ARCH $CLANG_DBGOPT_GPU $CC_OPTS"
 CUOPTS_HOST="$GPU_RDC --cuda-host-only -c -Wno-unused-value --hip-auto-headers=cuda_open -O$LLVMOPT --cuda-gpu-arch=$GPU_ARCH $GEN_DEBUG $CC_OPTS"
 
@@ -283,6 +284,7 @@ DEVICELIB=${DEVICELIB:-$MLCC/lib/libdevice}
 GCNDEVICE=`echo $DEVICELIB | grep libdevice`
 
 
+
 DEVICELIBDIR=$DEVICELIB
 #if [ -z $GCNDEVICE ]; then
 #  # Here a User supplied libgcn does not have libdevice convention
@@ -293,13 +295,19 @@ DEVICELIBDIR=$DEVICELIB
 #  DEVICELIBDIR=$DEVICELIB/$GPU_ARCH
 #fi
 
+# hack for clang10 require default devicelib
+CUOPTS_GPU_hack_opt="--hip-device-lib=cuda2ppu.ppu.bc --hip-device-lib-path=$DEVICELIBDIR"
+CUOPTS_GPU="$CUOPTS_GPU $CUOPTS_GPU_hack_opt"
+
+
 BCFILES=""
 DEVICE_BUILTIN_OBJ=""
 
 if [ $LC_MCPU == "ppu" ]; then
 # FIXME change to cuda2ppu.ppu.bc
 BCFILES="$BCFILES $DEVICELIBDIR/cuda2ppu.ppu.bc"
-BCFILES="$BCFILES $DEVICELIBDIR/cudamath.amdgcn.bc"
+# FIXME the cudamatch.amdgcn.bc is depend on irif
+#BCFILES="$BCFILES $DEVICELIBDIR/cudamath.amdgcn.bc"
 BCFILES="$BCFILES $DEVICELIBDIR/hip.amdgcn.bc"
 BCFILES="$BCFILES $DEVICELIBDIR/ppu--.bc"
 #BCFILES="$BCFILES $DEVICELIBDIR/subnormal_disable.bc"
@@ -563,6 +571,7 @@ if [ $ACTION != "LINK" ] ; then
 	#fi
 	CMD_CLC_HOST=`echo $CMD_CLC_HOST |sed -e "s#/tmp/\S*hipfb#$FATBIN#"`
 	CMD_CLC_HOST=`echo $CMD_CLC_HOST |sed -e "s#-cc1#-cc1 $DBGOPT_HOST #"`
+	CMD_CLC_HOST=`echo $CMD_CLC_HOST |sed -e "s#-x c++#-x hip#"`
 	echo $CMD_CLC_HOST
         runcmd "$CMD_CLC_HOST"
     elif [ "$GPU_RDC" != "" ] ; then
